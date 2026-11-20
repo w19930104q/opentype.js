@@ -130,6 +130,91 @@ describe('opentype.js on low memory mode', function() {
         assert.equal(aGlyph.path.commands.length, 14);
     });
 
+    // The head table's `modified` field is stamped with the current time on
+    // every write, so freeze it to be able to compare two writes byte for byte.
+    function withFrozenTime(fn) {
+        const RealDate = global.Date;
+        const fixedNow = 1700000000000;
+        global.Date = class extends RealDate {
+            constructor(...args) {
+                super(...(args.length ? args : [fixedNow]));
+            }
+            static now() {
+                return fixedNow;
+            }
+        };
+        try {
+            return fn();
+        } finally {
+            global.Date = RealDate;
+        }
+    }
+
+    it('writes back all glyphs after a low memory load, modify and write round-trip', function() {
+        const buffer = readFileSync('./test/fonts/Roboto-Black.ttf');
+
+        const modifyGlyphA = function(font) {
+            const glyph = font.charToGlyph('A');
+            const path = glyph.getPath();
+            path.commands[0].x += 10;
+            glyph.path = path;
+        };
+
+        let expected;
+        let actual;
+        withFrozenTime(function() {
+            // Reference: full load, modify one glyph, write back.
+            const fullFont = parse(buffer, {});
+            modifyGlyphA(fullFont);
+            expected = new Uint8Array(fullFont.toArrayBuffer());
+
+            // Low memory load, same modification, write back.
+            const lowFont = parse(buffer, opt);
+            assert.equal(lowFont.glyphs.length, 0);
+            modifyGlyphA(lowFont);
+            actual = new Uint8Array(lowFont.toArrayBuffer());
+        });
+
+        // All glyphs must be written, and unmodified glyph data must be
+        // byte-identical to the full-load write.
+        assert.deepEqual([...actual], [...expected]);
+
+        // Re-read the low memory output and compare against the re-read
+        // full-load output: glyph count and key glyph paths must match.
+        const reLow = parse(actual);
+        const reFull = parse(expected);
+        assert.equal(reLow.glyphs.length, reFull.glyphs.length);
+        assert.equal(reLow.glyphs.length, 1294);
+        for (const c of ['A', 'g', 'ﬁ']) {
+            const lowCommands = reLow.charToGlyph(c).getPath().commands;
+            const fullCommands = reFull.charToGlyph(c).getPath().commands;
+            assert.deepEqual(lowCommands, fullCommands);
+        }
+    });
+
+    it('writes back all glyphs after a low memory CFF load and write round-trip', function() {
+        const buffer = readFileSync('./test/fonts/FiraSansOT-Medium.otf');
+
+        let expected;
+        let actual;
+        withFrozenTime(function() {
+            const fullFont = parse(buffer, {});
+            expected = new Uint8Array(fullFont.toArrayBuffer());
+
+            const lowFont = parse(buffer, opt);
+            assert.equal(lowFont.glyphs.length, 0);
+            actual = new Uint8Array(lowFont.toArrayBuffer());
+        });
+
+        assert.deepEqual([...actual], [...expected]);
+
+        const reLow = parse(actual);
+        assert.equal(reLow.glyphs.length, 1151);
+        const lowCommands = reLow.charToGlyph('A').getPath().commands;
+        const fullCommands = parse(expected).charToGlyph('A').getPath().commands;
+        assert.deepEqual(lowCommands, fullCommands);
+    });
+
     it('handles a parseBuffer error', function(done, fail) {
         try{
             const font = loadSync('./test/fonts/badfont.otf', opt);

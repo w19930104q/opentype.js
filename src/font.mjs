@@ -600,6 +600,15 @@ Font.prototype.validate = function() {
  * @return {opentype.Table}
  */
 Font.prototype.toTables = function() {
+    // In low memory mode, glyphs are only loaded into the glyph set on
+    // demand, so font.glyphs.length does not reflect the real glyph count.
+    // Load any remaining glyphs now, otherwise the written font would only
+    // contain the glyphs that happened to be accessed since loading.
+    if (this._push) {
+        for (let i = 0; i < this.numGlyphs; i += 1) {
+            this.glyphs.get(i);
+        }
+    }
     return sfnt.fontToTable(this);
 };
 /**
