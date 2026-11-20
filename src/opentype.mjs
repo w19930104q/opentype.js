@@ -50,9 +50,9 @@ import { PaletteManager } from './palettes.mjs';
  * @param  {Number}
  * @return {Object[]}
  */
-function parseOpenTypeTableEntries(data, numTables) {
+function parseOpenTypeTableEntries(data, numTables, offset = 0) {
     const tableEntries = [];
-    let p = 12;
+    let p = offset + 12;
     for (let i = 0; i < numTables; i += 1) {
         const tag = parse.getTag(data, p);
         const checksum = parse.getULong(data, p + 4);
@@ -71,9 +71,9 @@ function parseOpenTypeTableEntries(data, numTables) {
  * @param  {Number}
  * @return {Object[]}
  */
-function parseWOFFTableEntries(data, numTables) {
+function parseWOFFTableEntries(data, numTables, offset = 0) {
     const tableEntries = [];
-    let p = 44; // offset to the first table directory entry.
+    let p = offset + 44; // offset to the first table directory entry.
     for (let i = 0; i < numTables; i += 1) {
         const tag = parse.getTag(data, p);
         const offset = parse.getULong(data, p + 4);
@@ -125,20 +125,44 @@ function uncompressTable(data, tableEntry) {
 // Public API ///////////////////////////////////////////////////////////
 
 /**
+ * Returns the PostScript name of the font whose offset table starts at the
+ * given offset, by parsing only its `name` table.
+ * @param  {DataView}
+ * @param  {Number} offset - Offset of the font's offset table within the data.
+ * @return {string|undefined}
+ */
+function getPostScriptName(data, offset) {
+    const numTables = parse.getUShort(data, offset + 4);
+    const tableEntries = parseOpenTypeTableEntries(data, numTables, offset);
+    for (let i = 0; i < tableEntries.length; i += 1) {
+        if (tableEntries[i].tag === 'name') {
+            const names = _name.parse(data, tableEntries[i].offset);
+            const platforms = ['windows', 'macintosh', 'unicode'];
+            for (let j = 0; j < platforms.length; j += 1) {
+                const postScriptName = names[platforms[j]] && names[platforms[j]].postScriptName;
+                if (postScriptName) {
+                    const languages = Object.keys(postScriptName);
+                    if (languages.length > 0) {
+                        return postScriptName[languages[0]];
+                    }
+                }
+            }
+        }
+    }
+    return undefined;
+}
+
+/**
  * Parse the OpenType file data (as an ArrayBuffer) and return a Font object.
  * Throws an error if the font could not be parsed.
+ * If the data is a TrueType/OpenType collection ('ttcf' signature), an array
+ * of Font objects is returned, unless opt.postscriptName is given, in which
+ * case only the matching member font is returned.
  * @param  {ArrayBuffer}
  * @param  {Object} opt - options for parsing
- * @return {opentype.Font}
+ * @return {opentype.Font|opentype.Font[]}
  */
 function parseBuffer(buffer, opt={}) {
-    let indexToLocFormat;
-    let ltagTable;
-
-    // Since the constructor can also be called to create new fonts from scratch, we indicate this
-    // should be an empty font that we'll fill with our own data.
-    const font = new Font({empty: true});
-
     if (buffer.constructor !== ArrayBuffer) { // convert node Buffer
         buffer = new Uint8Array(buffer).buffer;
     }
@@ -146,19 +170,58 @@ function parseBuffer(buffer, opt={}) {
     // We can't rely on typed array view types, because they operate with the endianness of the host computer.
     // Instead we use DataViews where we can specify endianness.
     const data = new DataView(buffer, 0);
+    if (parse.getTag(data, 0) === 'ttcf') {
+        const numFonts = parse.getULong(data, 8);
+        const offsets = [];
+        for (let i = 0; i < numFonts; i += 1) {
+            offsets.push(parse.getULong(data, 12 + i * 4));
+        }
+
+        if (opt.postscriptName !== undefined) {
+            for (let i = 0; i < offsets.length; i += 1) {
+                if (getPostScriptName(data, offsets[i]) === opt.postscriptName) {
+                    return parseFont(data, offsets[i], opt);
+                }
+            }
+            throw new Error('Font collection does not contain a font with PostScript name ' + opt.postscriptName);
+        }
+
+        return offsets.map(function(offset) {
+            return parseFont(data, offset, opt);
+        });
+    }
+
+    return parseFont(data, 0, opt);
+}
+
+/**
+ * Parse a single font whose offset table starts at the given offset.
+ * @param  {DataView}
+ * @param  {Number} offset - Offset of the font's offset table within the data.
+ * @param  {Object} opt - options for parsing
+ * @return {opentype.Font}
+ */
+function parseFont(data, offset, opt={}) {
+    let indexToLocFormat;
+    let ltagTable;
+
+    // Since the constructor can also be called to create new fonts from scratch, we indicate this
+    // should be an empty font that we'll fill with our own data.
+    const font = new Font({empty: true});
+
     let numTables;
     let tableEntries = [];
-    const signature = parse.getTag(data, 0);
+    const signature = parse.getTag(data, offset);
     if (signature === String.fromCharCode(0, 1, 0, 0) || signature === 'true' || signature === 'typ1') {
         font.outlinesFormat = 'truetype';
-        numTables = parse.getUShort(data, 4);
-        tableEntries = parseOpenTypeTableEntries(data, numTables);
+        numTables = parse.getUShort(data, offset + 4);
+        tableEntries = parseOpenTypeTableEntries(data, numTables, offset);
     } else if (signature === 'OTTO') {
         font.outlinesFormat = 'cff';
-        numTables = parse.getUShort(data, 4);
-        tableEntries = parseOpenTypeTableEntries(data, numTables);
+        numTables = parse.getUShort(data, offset + 4);
+        tableEntries = parseOpenTypeTableEntries(data, numTables, offset);
     } else if (signature === 'wOFF') {
-        const flavor = parse.getTag(data, 4);
+        const flavor = parse.getTag(data, offset + 4);
         if (flavor === String.fromCharCode(0, 1, 0, 0)) {
             font.outlinesFormat = 'truetype';
         } else if (flavor === 'OTTO') {
@@ -167,8 +230,8 @@ function parseBuffer(buffer, opt={}) {
             throw new Error('Unsupported OpenType flavor ' + signature);
         }
 
-        numTables = parse.getUShort(data, 12);
-        tableEntries = parseWOFFTableEntries(data, numTables);
+        numTables = parse.getUShort(data, offset + 12);
+        tableEntries = parseWOFFTableEntries(data, numTables, offset);
     } else if (signature === 'wOF2') {
         const issue = 'https://github.com/opentypejs/opentype.js/issues/183#issuecomment-1147228025';
         throw new Error('WOFF2 require an external decompressor library, see examples at: ' + issue);

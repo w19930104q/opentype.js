@@ -57,6 +57,57 @@ describe('opentype.mjs', function() {
         assert.equal(aGlyph.path.commands.length, 14);
     });
 
+    it('can load a TrueType Collection and list all members', function() {
+        const fonts = loadSync('./test/fonts/TestTTC.ttc');
+        assert.ok(Array.isArray(fonts));
+        assert.equal(fonts.length, 2);
+
+        const roboto = loadSync('./test/fonts/Roboto-Black.ttf');
+        const fira = loadSync('./test/fonts/FiraSansOT-Medium.otf');
+        const expected = [roboto, fira];
+
+        for (let i = 0; i < fonts.length; i++) {
+            const member = fonts[i];
+            const solo = expected[i];
+            assert.equal(member.outlinesFormat, solo.outlinesFormat);
+            assert.equal(member.unitsPerEm, solo.unitsPerEm);
+            assert.deepEqual(member.names, solo.names);
+            assert.equal(member.glyphs.length, solo.glyphs.length);
+            for (let j = 0; j < member.glyphs.length; j++) {
+                const a = member.glyphs.get(j);
+                const b = solo.glyphs.get(j);
+                assert.equal(a.name, b.name);
+                assert.equal(a.unicode, b.unicode);
+                assert.equal(a.advanceWidth, b.advanceWidth);
+                assert.deepEqual(a.path.commands, b.path.commands);
+            }
+        }
+    });
+
+    it('can select a collection member by PostScript name', function() {
+        const font = loadSync('./test/fonts/TestTTC.ttc', {postscriptName: 'FiraSansOTMedium'});
+        assert.ok(!Array.isArray(font));
+        const solo = loadSync('./test/fonts/FiraSansOT-Medium.otf');
+        assert.deepEqual(font.names, solo.names);
+        assert.equal(font.glyphs.length, solo.glyphs.length);
+        const aGlyph = font.charToGlyph('A');
+        assert.equal(aGlyph.name, 'A');
+        assert.equal(aGlyph.unicode, 65);
+        assert.deepEqual(aGlyph.path.commands, solo.charToGlyph('A').path.commands);
+    });
+
+    it('throws when the PostScript name is not in the collection', function() {
+        assert.throws(function() {
+            loadSync('./test/fonts/TestTTC.ttc', {postscriptName: 'DoesNotExist'});
+        }, /does not contain a font with PostScript name/);
+    });
+
+    it('still parses single fonts as Font objects, not arrays', function() {
+        const font = loadSync('./test/fonts/Roboto-Black.ttf');
+        assert.ok(font instanceof Font);
+        assert.ok(!Array.isArray(font));
+    });
+
     it('throws an error when advanceWidth is not set', function() {
         const notdefGlyph = new Glyph({
             name: '.notdef',

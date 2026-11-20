@@ -15,7 +15,7 @@ See [https://opentype.js.org/](https://opentype.js.org/) for a live demo.
 
 * Create a bézier path out of a piece of text.
 * Support for composite glyphs (accented letters).
-* Support for WOFF, OTF, TTF (both with TrueType `glyf` and PostScript `cff` outlines)
+* Support for WOFF, OTF, TTF (both with TrueType `glyf` and PostScript `cff` outlines) and TTC/OTC font collections
 * Support for kerning (Using GPOS or the kern table).
 * Support for ligatures.
 * Support for TrueType font hinting.
@@ -112,6 +112,20 @@ buffer.then(data => {
     const font = opentype.parse(data);
     console.log(font);
 })
+```
+
+### Loading a TTC/OTC font collection
+
+A TrueType/OpenType Collection (`.ttc`/`.otc`) contains several fonts in one file.
+`opentype.parse()` returns an array of `Font` objects for collections, unless you
+select a single member by its PostScript name:
+```js
+// parse all members of the collection:
+const fonts = opentype.parse(await buffer);
+console.log(fonts.map(font => font.names.windows.postScriptName.en));
+
+// or select a single member by PostScript name:
+const font = opentype.parse(await buffer, {postscriptName: 'MyFont-Regular'});
 ```
 
 <details>
